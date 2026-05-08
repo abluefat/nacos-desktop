@@ -1,0 +1,383 @@
+/* ===== 各视图深色模式补充样式 ===== */
+
+/* 版本管理页 */
+.dark .version-view .card-header {
+  color: #e2e8f0;
+}
+
+.dark .version-view .version-count {
+  color: #718096;
+}
+
+.dark .version-view .version-grid {
+  background: transparent;
+}
+
+.dark .version-view .version-item {
+  background-color: #16213e;
+  border-color: #2d3748;
+  color: #e2e8f0;
+}
+
+.dark .version-view .version-item:hover {
+  background-color: #1a2a4a;
+  border-color: #60a5fa;
+}
+
+.dark .version-view .version-item.selected {
+  background-color: #1a2a4a;
+  border-color: #60a5fa;
+}
+
+.dark .version-view .version-meta {
+  color: #a0aec0;
+}
+
+/* 版本表格 */
+.dark .version-view .el-table {
+  background-color: #16213e;
+  color: #e2e8f0;
+}
+
+.dark .version-view .el-table th.el-table__cell {
+  background-color: #1a1a2e !important;
+  color: #a0aec0 !important;
+  border-color: #2d3748 !important;
+}
+
+.dark .version-view .el-table td.el-table__cell {
+  background-color: #16213e !important;
+  border-color: #2d3748 !important;
+  color: #e2e8f0;
+}
+
+.dark .version-view .el-table__body tr:hover > td.el-table__cell {
+  background-color: #1a2a4a !important;
+}
+
+.dark .version-view .el-table--striped .el-table__body tr.el-table__row--striped td {
+  background: #1a1a2e !important;
+}
+
+/* 启动管理页 */
+.dark .startup-view .instance-grid {
+  background: transparent;
+}
+
+.dark .startup-view .instance-card .el-card__header {
+  background-color: #16213e;
+  border-color: #2d3748;
+  color: #e2e8f0;
+}
+
+.dark .startup-view .instance-card .el-card__body {
+  background-color: #1e2a3a;
+  color: #e2e8f0;
+}
+
+.dark .startup-view .instance-card .el-card__footer {
+  background-color: #1e2a3a;
+  border-color: #2d3748;
+}
+
+.dark .startup-view .instance-name {
+  color: #e2e8f0;
+}
+
+.dark .startup-view .instance-info .label {
+  color: #718096;
+}
+
+.dark .startup-view .instance-info .value {
+  color: #e2e8f0;
+}
+
+.dark .startup-view .instance-info .pid {
+  color: #68d391;
+}
+
+.dark .startup-view .cluster-section .section-title {
+  color: #718096;
+}
+
+.dark .startup-view .cluster-node {
+  background-color: #16213e;
+  border-color: #2d3748;
+  color: #718096;
+}
+
+.dark .startup-view .cluster-node.healthy {
+  color: #68d391;
+  border-color: #276749;
+}
+
+.dark .startup-view .cluster-node.unhealthy {
+  color: #fc8181;
+  border-color: #9b2c2c;
+}
+
+/* 配置管理页 */
+.dark .config-view .left-panel {
+  background-color: #16213e;
+  border-color: #2d3748;
+}
+
+.dark .config-view .panel-title {
+  color: #e2e8f0;
+}
+
+.dark .config-view .connection-list {
+  background: transparent;
+}
+
+.dark .config-view .connection-item {
+  background-color: #1a2a4a;
+  border-color: #2d3748;
+  color: #e2e8f0;
+}
+
+.dark .config-view .connection-item:hover {
+  background-color: #243b5a;
+}
+
+.dark .config-view .connection-item.active {
+  background-color: #1a2a4a;
+  border-color: #60a5fa;
+  border-left: 3px solid #60a5fa;
+}
+
+.dark .config-view .conn-name {
+  color: #e2e8f0;
+}
+
+.dark .config-view .conn-url {
+  color: #718096;
+}
+
+.dark .config-view .conn-more {
+  color: #718096;
+}
+
+.dark .config-view .refresh-btn {
+  background-color: #16213e;
+  border-color: #2d3748;
+}
+
+/* 未认证横幅 */
+.dark .config-view .login-banner {
+  background-color: rgba(246, 173, 85, 0.12);
+  border-color: rgba(246, 173, 85, 0.3);
+  color: #e2e8f0;
+}
+
+.dark .config-view .banner-text {
+  color: #e2e8f0;
+}
+
+.dark .config-view .banner-icon {
+  color: #f6ad55;
+}
+
+/* 右侧工具栏 */
+.dark .config-view .toolbar {
+  background-color: transparent;
+  border-bottom: 1px solid #2d3748;
+}
+
+.dark .config-view .active-conn-name {
+  color: #e2e8f0;
+}
+
+/* 命名空间/搜索框 */
+.dark .config-view .toolbar .el-select .el-input__wrapper,
+.dark .config-view .toolbar .el-input .el-input__wrapper {
+  background-color: #1a2a4a !important;
+  box-shadow: none !important;
+  border: 1px solid #2d3748;
+}
+
+.dark .config-view .toolbar .el-select .el-input__inner,
+.dark .config-view .toolbar .el-input__inner {
+  color: #e2e8f0;
+}
+
+.dark .config-view .toolbar .el-select .el-input__wrapper .el-select__caret {
+  color: #a0aec0;
+}
+
+.dark .config-view .toolbar .el-input__wrapper:hover,
+.dark .config-view .toolbar .el-select .el-input__wrapper:hover {
+  border-color: #4a5568 !important;
+}
+
+/* 配置表格 */
+.dark .config-view .config-table {
+  background: transparent;
+}
+
+.dark .config-view .config-table .el-table {
+  background-color: #1e2a3a;
+  color: #e2e8f0;
+}
+
+.dark .config-view .config-table .el-table__header-wrapper th {
+  background-color: #16213e !important;
+  color: #a0aec0 !important;
+  border-color: #2d3748 !important;
+}
+
+.dark .config-view .config-table .el-table__body-wrapper td {
+  background-color: #1e2a3a !important;
+  border-color: #2d3748 !important;
+  color: #e2e8f0;
+}
+
+.dark .config-view .config-table .el-table__body tr:hover > td.el-table__cell {
+  background-color: #1a2a4a !important;
+}
+
+.dark .config-view .config-table .el-table--striped .el-table__body tr.el-table__row--striped td {
+  background: #1e2a3a !important;
+}
+
+/* 工具栏按钮 */
+.dark .config-view .toolbar .el-button--text {
+  color: #a0aec0;
+}
+
+.dark .config-view .toolbar .el-button--text:hover {
+  color: #60a5fa;
+}
+
+/* 分页 */
+.dark .config-view .el-pagination__total {
+  color: #a0aec0;
+}
+
+/* ===== 通用组件深色模式补充 ===== */
+
+/* 下拉选中项 */
+.dark .el-select-dropdown__item.selected {
+  color: #60a5fa;
+}
+
+/* 警告提示 */
+.dark .el-alert {
+  background-color: rgba(246, 173, 85, 0.1);
+  border-color: rgba(246, 173, 85, 0.3);
+}
+
+.dark .el-alert__title {
+  color: #f6ad55;
+}
+
+/* 复选框 */
+.dark .el-checkbox__label {
+  color: #e2e8f0;
+}
+
+.dark .el-checkbox__inner {
+  background-color: #1a2a4a;
+  border-color: #4a5568;
+}
+
+/* 分割线 */
+.dark .el-divider__text {
+  background-color: #1e2a3a;
+  color: #718096;
+}
+
+/* 折叠面板 */
+.dark .el-collapse {
+  border-color: #2d3748;
+}
+
+.dark .el-collapse-item__header {
+  background-color: #16213e;
+  border-color: #2d3748;
+  color: #e2e8f0;
+}
+
+.dark .el-collapse-item__wrap {
+  background-color: #1e2a3a;
+  border-color: #2d3748;
+}
+
+.dark .el-collapse-item__content {
+  color: #a0aec0;
+}
+
+/* 消息提示 */
+.dark .el-message {
+  background-color: #1e2a3a;
+  border-color: #2d3748;
+  color: #e2e8f0;
+}
+
+/* 通知 */
+.dark .el-notification {
+  background-color: #1e2a3a;
+  border-color: #2d3748;
+}
+
+.dark .el-notification__title {
+  color: #e2e8f0;
+}
+
+.dark .el-notification__content {
+  color: #a0aec0;
+}
+
+/* 滚动条美化 */
+.dark *::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.dark *::-webkit-scrollbar-track {
+  background: #1a1a2e;
+}
+
+.dark *::-webkit-scrollbar-thumb {
+  background: #4a5568;
+  border-radius: 3px;
+}
+
+.dark *::-webkit-scrollbar-thumb:hover {
+  background: #718096;
+}
+
+/* 深色模式下侧边栏菜单补充 */
+.dark .sidebar {
+  background-color: #16213e !important;
+}
+
+.dark .sidebar-header {
+  background-color: #16213e;
+  border-color: #2d3748 !important;
+}
+
+.dark .sidebar-header .version-tag {
+  color: #718096;
+}
+
+.dark .sidebar-footer {
+  background-color: #16213e;
+  border-color: #2d3748 !important;
+}
+
+/* 深色模式菜单激活态 */
+.dark .sidebar-menu .el-menu-item {
+  color: #a0aec0;
+}
+
+.dark .sidebar-menu .el-menu-item:hover {
+  background-color: #2d3748 !important;
+  color: #e2e8f0;
+}
+
+.dark .sidebar-menu .el-menu-item.is-active {
+  background-color: rgba(96, 165, 250, 0.15) !important;
+  color: #60a5fa !important;
+  border-right: 3px solid #60a5fa;
+}
