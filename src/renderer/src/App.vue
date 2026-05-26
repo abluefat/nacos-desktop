@@ -240,6 +240,11 @@ onUnmounted(() => {
   overflow: auto;
   padding: 24px;
   transition: padding 0.3s;
+  scrollbar-width: none;
+}
+
+.main-content::-webkit-scrollbar {
+  display: none;
 }
 
 /* Element Plus 菜单深色模式适配 */
@@ -264,6 +269,13 @@ onUnmounted(() => {
 
 <!-- 全局暗黑模式样式 -->
 <style>
+/* 隐藏 html/body 级别滚动条 */
+html, body {
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+
 /* 浅色模式变量 */
 :root {
   --bg-color-base: #f5f7fa;

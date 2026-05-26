@@ -21,10 +21,14 @@
         >
           <div class="conn-status-dot" :class="getConnStatusClass(conn)" />
           <div class="conn-info">
-            <div class="conn-name">{{ conn.name }}</div>
+            <div class="conn-name">
+              {{ conn.name }}
+              <el-tag v-if="conn.instance_id" size="small" type="info" title="由本程序自动管理">本地</el-tag>
+              <el-tag v-else-if="conn.version === '3.x'" size="small" type="warning">3.x</el-tag>
+            </div>
             <div class="conn-url">{{ conn.server_url }}</div>
           </div>
-          <el-dropdown size="small" trigger="click" @click.stop>
+          <el-dropdown v-if="!conn.instance_id" size="small" trigger="click" @click.stop>
             <el-icon class="conn-more"><MoreFilled /></el-icon>
             <template #dropdown>
               <el-dropdown-menu>
@@ -180,6 +184,13 @@
         </el-form-item>
         <el-form-item label="服务地址" prop="server_url">
           <el-input v-model="connectionForm.server_url" placeholder="http://localhost:8848" />
+        </el-form-item>
+        <el-form-item label="版本">
+          <el-select v-if="!connectionForm.instance_id" v-model="connectionForm.version" style="width: 100%">
+            <el-option label="Nacos 1.x / 2.x" value="2.x" />
+            <el-option label="Nacos 3.x+" value="3.x" />
+          </el-select>
+          <el-input v-else v-model="connectionForm.version" disabled />
         </el-form-item>
         <el-form-item label="用户名">
           <el-input v-model="connectionForm.username" placeholder="nacos（留空跳过鉴权）" />
@@ -416,7 +427,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Refresh, Search, ArrowDown, MoreFilled, Key, Warning, CircleCheck,
@@ -638,7 +649,7 @@ watch(previewContainerRef, (el) => {
 
 // ==================== 类型定义 ====================
 interface NacosConnection {
-  id?: number; name: string; server_url: string; namespace?: string; username?: string; password?: string
+  id?: number; name: string; server_url: string; namespace?: string; username?: string; password?: string; version?: string; instance_id?: number
 }
 interface NacosNamespace {
   namespace: string; namespaceShowName: string; quota: number; configCount: number
@@ -678,7 +689,7 @@ const loginForm = ref({ username: 'nacos', password: 'nacos' })
 const connectionDialogVisible = ref(false)
 const isEditConn = ref(false)
 const connectionFormRef = ref()
-const connectionForm = ref<NacosConnection>({ name: '', server_url: 'http://localhost:8848', username: 'nacos', password: 'nacos' })
+const connectionForm = ref<NacosConnection>({ name: '', server_url: 'http://localhost:8848', username: 'nacos', password: 'nacos', version: '2.x' })
 const connectionRules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
   server_url: [{ required: true, message: '请输入服务地址', trigger: 'blur' }]
@@ -721,8 +732,55 @@ const importLoading = ref(false)
 // ==================== 工具函数 ====================
 function getBaseURL(): string {
   if (!activeConnection.value) return ''
-  return activeConnection.value.server_url.replace(/\/$/, '')
+  const base = activeConnection.value.server_url.replace(/\/$/, '')
+  // Nacos 1.x/2.x/3.x 的 Admin API 都在 /nacos context path 下
+  return base + '/nacos'
 }
+
+function isV3(): boolean {
+  return activeConnection.value?.version === '3.x'
+}
+
+/** 解包 3.x 统一响应体 {code, message, data} */
+function unwrapResponse(res: any): any {
+  if (!isV3()) return res
+  if (res && typeof res === 'object' && 'data' in res && 'code' in res) {
+    return res.data
+  }
+  return res
+}
+
+/** 2.x 参数名 → 3.x 参数名 */
+function mapParams(params: Record<string, any>): Record<string, any> {
+  if (!isV3()) return params
+  const mapped: Record<string, any> = {}
+  for (const [k, v] of Object.entries(params)) {
+    if (k === 'group') mapped.groupName = v
+    else if (k === 'tenant') mapped.namespaceId = v
+    else mapped[k] = v
+  }
+  return mapped
+}
+
+/** 统一配置字段（3.x 返回 groupName，2.x 返回 group） */
+function normalizeConfig(item: any): NacosConfig {
+  return {
+    id: item.id,
+    dataId: item.dataId,
+    group: item.group || item.groupName || 'DEFAULT_GROUP',
+    tenant: item.tenant || item.namespaceId || '',
+    content: item.content || '',
+    md5: item.md5,
+    appName: item.appName || '',
+    type: item.type || 'text'
+  }
+}
+
+function getConfigListPath() { return isV3() ? '/v3/admin/cs/config/list' : '/v1/cs/configs' }
+function getConfigDetailPath() { return isV3() ? '/v3/admin/cs/config' : '/v1/cs/configs' }
+function getNamespacePath() { return isV3() ? '/v3/admin/core/namespace/list' : '/v1/console/namespaces' }
+function getHistoryListPath() { return isV3() ? '/v3/admin/cs/history/list' : '/v1/cs/history' }
+function getHistoryDetailPath() { return isV3() ? '/v3/admin/cs/history' : '/v1/cs/history' }
 
 function formatDate(ts: number): string {
   if (!ts) return '-'
@@ -743,18 +801,63 @@ function getConnStatusClass(conn: NacosConnection): string {
   return 'dot-gray'
 }
 
+/**
+ * 检测单个连接是否可达
+ */
+async function checkConnectionHealth(conn: NacosConnection): Promise<boolean> {
+  try {
+    const result = await window.api.connection.healthCheck(conn.server_url, conn.version)
+    return result.reachable
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 刷新所有连接的健康状态
+ */
+async function refreshAllConnectionStatus() {
+  for (const conn of connections.value) {
+    if (conn.id !== undefined) {
+      const reachable = await checkConnectionHealth(conn)
+      connStatusMap.value[conn.id] = reachable ? 'success' : 'fail'
+    }
+  }
+}
+
+let healthCheckTimer: ReturnType<typeof setInterval> | null = null
+
+function startHealthCheckTimer() {
+  if (healthCheckTimer) clearInterval(healthCheckTimer)
+  healthCheckTimer = setInterval(() => {
+    refreshAllConnectionStatus()
+  }, 10000)
+}
+
+function stopHealthCheckTimer() {
+  if (healthCheckTimer) {
+    clearInterval(healthCheckTimer)
+    healthCheckTimer = null
+  }
+}
+
 // ==================== 连接管理 ====================
 async function loadConnections() {
   connections.value = await window.api.connection.getAll()
+  await refreshAllConnectionStatus()
 }
 
 function handleAddConnection() {
   isEditConn.value = false
-  connectionForm.value = { name: '', server_url: 'http://localhost:8848', username: 'nacos', password: 'nacos' }
+  connectionForm.value = { name: '', server_url: 'http://localhost:8848', username: 'nacos', password: 'nacos', version: '2.x' }
   connectionDialogVisible.value = true
 }
 
 function handleEditConnection(conn: NacosConnection) {
+  if (conn.instance_id) {
+    ElMessage.warning('本地连接由程序自动管理，不可编辑')
+    return
+  }
   isEditConn.value = true
   connectionForm.value = { ...conn }
   connectionDialogVisible.value = true
@@ -764,6 +867,11 @@ async function submitConnection() {
   if (!connectionFormRef.value) return
   try {
     await connectionFormRef.value.validate()
+    // 禁止编辑本地连接
+    if (isEditConn.value && connectionForm.value.instance_id) {
+      ElMessage.warning('本地连接由程序自动管理，不可编辑')
+      return
+    }
     if (isEditConn.value && connectionForm.value.id) {
       await window.api.connection.delete(connectionForm.value.id)
     }
@@ -777,6 +885,10 @@ async function submitConnection() {
 }
 
 async function handleDeleteConnection(conn: NacosConnection) {
+  if (conn.instance_id) {
+    ElMessage.warning('本地连接由程序自动管理，不可删除')
+    return
+  }
   try {
     await ElMessageBox.confirm(`确定删除连接「${conn.name}」？`, '确认删除')
     await window.api.connection.delete(conn.id!)
@@ -791,6 +903,17 @@ async function handleDeleteConnection(conn: NacosConnection) {
 
 async function selectConnection(conn: NacosConnection) {
   if (activeConnection.value?.id === conn.id) return
+
+  // 先检测连接是否可达
+  const reachable = await checkConnectionHealth(conn)
+  if (conn.id !== undefined) {
+    connStatusMap.value[conn.id] = reachable ? 'success' : 'fail'
+  }
+  if (!reachable) {
+    const checkUrl = `${conn.server_url.replace(/\/$/, '')}/nacos/`
+    ElMessage.warning(`无法连接到 ${conn.name}，请检查地址和端口是否正确\n检测地址: ${checkUrl}`)
+  }
+
   activeConnection.value = conn
   accessToken.value = ''
   loginStatus.value = 'none'
@@ -798,9 +921,11 @@ async function selectConnection(conn: NacosConnection) {
   selectedNamespace.value = ''
   configs.value = []
   pageNo.value = 1
-  if (conn.username) await doLogin()
-  await loadNamespaces()
-  await loadConfigs()
+  if (conn.username && reachable) await doLogin()
+  if (reachable) {
+    await loadNamespaces()
+    await loadConfigs()
+  }
 }
 
 // ==================== 登录鉴权 ====================
@@ -814,7 +939,7 @@ async function submitLogin() {
   loginLoading.value = true
   try {
     const baseURL = getBaseURL()
-    const res = await nacosPost(`${baseURL}/nacos/v1/auth/users/login`, { username: loginForm.value.username, password: loginForm.value.password })
+    const res = await nacosPost(`${baseURL}/v1/auth/users/login`, { username: loginForm.value.username, password: loginForm.value.password })
     if (res?.accessToken) {
       accessToken.value = res.accessToken
       loginStatus.value = 'success'
@@ -828,8 +953,10 @@ async function submitLogin() {
     }
   } catch (e: any) {
     if (e?.message === 'ERR_CONNECTION_REFUSED') {
-      ElMessage.error('Nacos 未启动，请先启动 Nacos 服务')
+      const targetUrl = `${baseURL}/v1/auth/users/login`
+      ElMessage.error(`无法连接到 Nacos 服务，目标地址: ${targetUrl}。请检查 Nacos 是否已启动，以及连接地址和端口是否正确。`)
       loginStatus.value = 'none'
+      if (activeConnection.value?.id) connStatusMap.value[activeConnection.value.id] = 'fail'
     } else {
       ElMessage.error(`登录失败: ${e.message || '用户名或密码不正确'}`)
       loginStatus.value = 'fail'
@@ -847,17 +974,21 @@ async function doLogin() {
   loginLoading.value = true
   try {
     const baseURL = getBaseURL()
-    const res = await nacosPost(`${baseURL}/nacos/v1/auth/users/login`, { username: conn.username || '', password: conn.password || '' })
+    const res = await nacosPost(`${baseURL}/v1/auth/users/login`, { username: conn.username || '', password: conn.password || '' })
     if (res?.accessToken) {
       accessToken.value = res.accessToken
       loginStatus.value = 'success'
       if (conn.id) connStatusMap.value[conn.id] = 'success'
     }
   } catch (e: any) {
-    if (e?.message === 'ERR_CONNECTION_REFUSED') { loginStatus.value = 'none'; return }
+    if (e?.message === 'ERR_CONNECTION_REFUSED') {
+      loginStatus.value = 'none'
+      if (conn.id) connStatusMap.value[conn.id] = 'fail'
+      return
+    }
     if (e?.message?.includes('403') || e?.message?.toLowerCase().includes('forbidden')) {
       loginStatus.value = 'fail'
-      if (activeConnection.value?.id) connStatusMap.value[activeConnection.value.id] = 'fail'
+      if (conn.id) connStatusMap.value[conn.id] = 'fail'
     } else { loginStatus.value = 'none' }
   } finally {
     loginLoading.value = false
@@ -869,8 +1000,10 @@ async function loadNamespaces() {
   try {
     const params: Record<string, any> = {}
     if (accessToken.value) params.accessToken = accessToken.value
-    const res = await nacosGet(`${getBaseURL()}/nacos/v1/console/namespaces`, params)
-    if (res?.data) namespaces.value = (res.data as NacosNamespace[]).filter(n => n.namespace !== '')
+    const res = await nacosGet(`${getBaseURL()}${getNamespacePath()}`, mapParams(params))
+    const data = unwrapResponse(res)
+    if (data?.data) namespaces.value = (data.data as NacosNamespace[]).filter(n => n.namespace !== '')
+    else if (Array.isArray(data)) namespaces.value = (data as NacosNamespace[]).filter(n => n.namespace !== '')
   } catch (e: any) {
     if (e?.message !== 'ERR_CONNECTION_REFUSED') console.warn('loadNamespaces error:', e?.message)
   }
@@ -893,10 +1026,11 @@ async function loadConfigs() {
     else params.group = ''
     if (selectedNamespace.value) params.tenant = selectedNamespace.value
     if (accessToken.value) params.accessToken = accessToken.value
-    const res = await nacosGet(`${getBaseURL()}/nacos/v1/cs/configs`, params)
-    if (res?.pageItems) {
-      configs.value = res.pageItems
-      totalCount.value = res.totalCount || 0
+    const res = await nacosGet(`${getBaseURL()}${getConfigListPath()}`, mapParams(params))
+    const data = unwrapResponse(res)
+    if (data?.pageItems) {
+      configs.value = data.pageItems.map(normalizeConfig)
+      totalCount.value = data.totalCount || 0
     } else { configs.value = []; totalCount.value = 0 }
   } catch (e: any) {
     const msg: string = e?.message || ''
@@ -931,8 +1065,9 @@ async function handleEditConfig(config: NacosConfig) {
     const params: Record<string, any> = { dataId: config.dataId, group: config.group }
     if (selectedNamespace.value) params.tenant = selectedNamespace.value
     if (accessToken.value) params.accessToken = accessToken.value
-    const res = await nacosGet(`${getBaseURL()}/nacos/v1/cs/configs`, params)
-    const rawContent = typeof res === 'string' ? res : JSON.stringify(res, null, 2)
+    const res = await nacosGet(`${getBaseURL()}${getConfigDetailPath()}`, mapParams(params))
+    const data = unwrapResponse(res)
+    const rawContent = typeof data === 'string' ? data : (data?.content || JSON.stringify(data, null, 2))
     originalContent.value = rawContent
     configForm.value.content = rawContent
     setEditorContent(rawContent)
@@ -957,7 +1092,7 @@ async function submitConfig() {
     if (configForm.value.desc) formData.desc = configForm.value.desc
     if (selectedNamespace.value) formData.tenant = selectedNamespace.value
     if (accessToken.value) formData.accessToken = accessToken.value
-    await nacosPost(`${getBaseURL()}/nacos/v1/cs/configs`, formData)
+    await nacosPost(`${getBaseURL()}${getConfigDetailPath()}`, mapParams(formData) as Record<string, string>)
     ElMessage.success('配置已发布')
     configDialogVisible.value = false
     await loadConfigs()
@@ -974,7 +1109,7 @@ async function handleDeleteConfig(config: NacosConfig) {
     const params: Record<string, any> = { dataId: config.dataId, group: config.group }
     if (selectedNamespace.value) params.tenant = selectedNamespace.value
     if (accessToken.value) params.accessToken = accessToken.value
-    await nacosDelete(`${getBaseURL()}/nacos/v1/cs/configs`, params)
+    await nacosDelete(`${getBaseURL()}${getConfigDetailPath()}`, mapParams(params))
     ElMessage.success('已删除')
     await loadConfigs()
   } catch (e: any) {
@@ -996,8 +1131,9 @@ async function handleQuickView(config: NacosConfig) {
     const params: Record<string, any> = { dataId: config.dataId, group: config.group }
     if (selectedNamespace.value) params.tenant = selectedNamespace.value
     if (accessToken.value) params.accessToken = accessToken.value
-    const res = await nacosGet(`${getBaseURL()}/nacos/v1/cs/configs`, params)
-    previewContent.value = typeof res === 'string' ? res : JSON.stringify(res, null, 2)
+    const res = await nacosGet(`${getBaseURL()}${getConfigDetailPath()}`, mapParams(params))
+    const data = unwrapResponse(res)
+    previewContent.value = typeof data === 'string' ? data : (data?.content || JSON.stringify(data, null, 2))
     setPreviewContent(previewContent.value)
   } catch {
     previewContent.value = config.content || '（无法加载内容）'
@@ -1032,10 +1168,11 @@ async function loadHistory() {
     }
     if (selectedNamespace.value) params.tenant = selectedNamespace.value
     if (accessToken.value) params.accessToken = accessToken.value
-    const res = await nacosGet(`${getBaseURL()}/nacos/v1/cs/history`, params)
-    if (res?.pageItems) {
-      historyList.value = res.pageItems
-      historyTotal.value = res.totalCount || 0
+    const res = await nacosGet(`${getBaseURL()}${getHistoryListPath()}`, mapParams(params))
+    const data = unwrapResponse(res)
+    if (data?.pageItems) {
+      historyList.value = data.pageItems
+      historyTotal.value = data.totalCount || 0
     } else { historyList.value = []; historyTotal.value = 0 }
   } catch (e: any) {
     ElMessage.error(`加载历史失败: ${e.message}`)
@@ -1056,8 +1193,9 @@ async function previewHistory(item: HistoryItem) {
   try {
     const params: Record<string, any> = { nid: item.id }
     if (accessToken.value) params.accessToken = accessToken.value
-    const res = await nacosGet(`${getBaseURL()}/nacos/v1/cs/history`, params)
-    historyPreview.value = res?.content || JSON.stringify(res, null, 2)
+    const res = await nacosGet(`${getBaseURL()}${getHistoryDetailPath()}`, mapParams(params))
+    const data = unwrapResponse(res)
+    historyPreview.value = data?.content || JSON.stringify(data, null, 2)
   } catch {
     historyPreview.value = item.content || '（无法获取内容）'
   }
@@ -1067,12 +1205,30 @@ async function rollbackHistory(item: HistoryItem) {
   if (!historyConfig.value) return
   try {
     await ElMessageBox.confirm(`确定回滚到版本 ID=${item.id}？当前配置将被覆盖`, '确认回滚', { type: 'warning' })
-    const formData: Record<string, string> = {
-      dataId: historyConfig.value.dataId, group: historyConfig.value.group, id: String(item.id)
+    if (isV3()) {
+      // 3.x 没有 rollback API，先获取历史内容再重新发布
+      const params: Record<string, any> = { nid: item.id }
+      if (accessToken.value) params.accessToken = accessToken.value
+      const res = await nacosGet(`${getBaseURL()}${getHistoryDetailPath()}`, mapParams(params))
+      const data = unwrapResponse(res)
+      const content = data?.content || ''
+      const formData: Record<string, string> = {
+        dataId: historyConfig.value.dataId,
+        group: historyConfig.value.group,
+        content,
+        type: historyConfig.value.type || 'text'
+      }
+      if (selectedNamespace.value) formData.tenant = selectedNamespace.value
+      if (accessToken.value) formData.accessToken = accessToken.value
+      await nacosPost(`${getBaseURL()}${getConfigDetailPath()}`, mapParams(formData) as Record<string, string>)
+    } else {
+      const formData: Record<string, string> = {
+        dataId: historyConfig.value.dataId, group: historyConfig.value.group, id: String(item.id)
+      }
+      if (selectedNamespace.value) formData.tenant = selectedNamespace.value
+      if (accessToken.value) formData.accessToken = accessToken.value
+      await nacosPost(`${getBaseURL()}/v1/cs/history/rollback`, formData)
     }
-    if (selectedNamespace.value) formData.tenant = selectedNamespace.value
-    if (accessToken.value) formData.accessToken = accessToken.value
-    await nacosPost(`${getBaseURL()}/nacos/v1/cs/history/rollback`, formData)
     ElMessage.success('回滚成功')
     historyDialogVisible.value = false
     await loadConfigs()
@@ -1092,14 +1248,16 @@ async function handleExport() {
       const params: Record<string, any> = { search: 'blur', dataId: '', group: '', pageNo: page, pageSize: 100 }
       if (selectedNamespace.value) params.tenant = selectedNamespace.value
       if (accessToken.value) params.accessToken = accessToken.value
-      const res = await nacosGet(`${getBaseURL()}/nacos/v1/cs/configs`, params)
-      const items: NacosConfig[] = res?.pageItems || []
+      const res = await nacosGet(`${getBaseURL()}${getConfigListPath()}`, mapParams(params))
+      const data = unwrapResponse(res)
+      const items: NacosConfig[] = (data?.pageItems || []).map(normalizeConfig)
       for (const item of items) {
         const cparams: Record<string, any> = { dataId: item.dataId, group: item.group }
         if (selectedNamespace.value) cparams.tenant = selectedNamespace.value
         if (accessToken.value) cparams.accessToken = accessToken.value
-        const cres = await nacosGet(`${getBaseURL()}/nacos/v1/cs/configs`, cparams)
-        allConfigs.push({ ...item, content: typeof cres === 'string' ? cres : JSON.stringify(cres) })
+        const cres = await nacosGet(`${getBaseURL()}${getConfigDetailPath()}`, mapParams(cparams))
+        const cdata = unwrapResponse(cres)
+        allConfigs.push({ ...item, content: typeof cdata === 'string' ? cdata : (cdata?.content || JSON.stringify(cdata)) })
       }
       if (items.length < 100) break
       page++
@@ -1153,7 +1311,7 @@ async function confirmImport() {
         }
         if (selectedNamespace.value) formData.tenant = selectedNamespace.value
         if (accessToken.value) formData.accessToken = accessToken.value
-        await nacosPost(`${getBaseURL()}/nacos/v1/cs/configs`, formData)
+        await nacosPost(`${getBaseURL()}${getConfigDetailPath()}`, mapParams(formData) as Record<string, string>)
         success++
       } catch { fail++ }
     }
@@ -1165,7 +1323,23 @@ async function confirmImport() {
   }
 }
 
-onMounted(() => { loadConnections() })
+// 监听实例启动事件，自动刷新连接列表
+function onInstanceStatusChanged(instanceId: number, status: string) {
+  if (status === 'running') {
+    loadConnections()
+  }
+}
+
+onMounted(() => {
+  loadConnections()
+  startHealthCheckTimer()
+  window.api.on('instance:status-changed', onInstanceStatusChanged)
+})
+
+onUnmounted(() => {
+  stopHealthCheckTimer()
+  window.api.off('instance:status-changed', onInstanceStatusChanged)
+})
 </script>
 
 <style scoped>

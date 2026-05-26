@@ -289,6 +289,12 @@ db.password.0=${mysqlConfig.password}
   ipcMain.handle('instance:delete', (_, id: number) => {
     try {
       db.deleteInstance(id)
+      // 同步删除关联的本地连接
+      try {
+        db.deleteConnectionsByInstanceId(id)
+      } catch (e: any) {
+        log.warn('[Instance] Failed to delete associated connections:', e.message)
+      }
       return true
     } catch (error) {
       log.error('Failed to delete instance:', error)
@@ -304,7 +310,48 @@ db.password.0=${mysqlConfig.password}
    * 验证 Java 环境是否正常，在启动前给出明确的错误提示
    * 策略：1. JAVA_HOME 直接试；2. 快捷方式(.lnk)用 PowerShell 解析；3. 用 where.exe 从 PATH 找
    */
-  async function verifyJavaEnvironment(): Promise<{ ok: boolean; javaHome?: string; error?: string; hint?: string }> {
+  /**
+   * 从 java -version 输出解析 Java major version（如 8, 11, 17, 21）
+   * 支持格式："1.8.0_xxx", "11.0.x", "17.0.x", "21.0.x" 等
+   */
+  function parseJavaMajorVersion(versionOutput: string): number | null {
+    // 匹配 "1.8.0" 或 "11.0.x" 等格式
+    const match = versionOutput.match(/version "(\d+)(?:\.(\d+))?/i)
+    if (!match) return null
+    const major = parseInt(match[1], 10)
+    if (isNaN(major)) return null
+    // Java 8 及以前：version "1.8.0_xxx" → major=1, second=8
+    if (major === 1 && match[2]) {
+      const second = parseInt(match[2], 10)
+      if (!isNaN(second)) return second
+    }
+    // Java 9+: version "11.0.x" → major=11
+    return major
+  }
+
+  /**
+   * 根据 Nacos 版本号获取最低 JDK 要求
+   * - Nacos 1.x: JDK 8
+   * - Nacos 2.0.x ~ 2.3.x: JDK 8
+   * - Nacos 2.4.x+: JDK 11
+   */
+  function getMinJdkForNacos(nacosVersion: string): number {
+    const ver = nacosVersion.replace(/^v/i, '').trim()
+    const parts = ver.split('.')
+    if (parts.length < 1) return 8
+    const major = parseInt(parts[0], 10)
+    if (isNaN(major)) return 8
+    if (major === 1) return 8
+    if (major === 2) {
+      const minor = parseInt(parts[1], 10)
+      if (isNaN(minor)) return 8
+      return minor >= 4 ? 11 : 8
+    }
+    // Nacos 3.x+ (未来版本，保守估计)
+    return 11
+  }
+
+  async function verifyJavaEnvironment(): Promise<{ ok: boolean; javaHome?: string; javaVersion?: number; error?: string; hint?: string }> {
       // 策略1：直接试 JAVA_HOME
     let javaHome = process.env.JAVA_HOME
     log.info("[JavaCheck] JAVA_HOME", javaHome);
@@ -334,7 +381,7 @@ db.password.0=${mysqlConfig.password}
         if (existsSync(javaExe)) {
           const result = await testJavaExe(javaExe)
           if (result.ok) {
-            return { ok: true, javaHome }
+            return { ok: true, javaHome, javaVersion: result.majorVersion }
           }
           log.warn(`[JavaCheck] JAVA_HOME java test failed: ${result.error}`)
         }
@@ -350,7 +397,7 @@ db.password.0=${mysqlConfig.password}
           log.info(`[JavaCheck] Found java in PATH: ${javaPath}`)
           const result = await testJavaExe(join(javaPath, 'bin', 'java.exe'))
           if (result.ok) {
-            return { ok: true, javaHome: javaPath }
+            return { ok: true, javaHome: javaPath, javaVersion: result.majorVersion }
           }
         }
       } catch (e: any) {
@@ -371,7 +418,7 @@ db.password.0=${mysqlConfig.password}
   /**
    * 测试 java.exe 是否可用
    */
-  async function testJavaExe(javaExe: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+  async function testJavaExe(javaExe: string): Promise<{ ok: boolean; output?: string; error?: string; majorVersion?: number }> {
     return new Promise((resolve) => {
       let output = ''
       const timer = setTimeout(() => {
@@ -398,7 +445,8 @@ db.password.0=${mysqlConfig.password}
         const clean = output.trim().replace(/\n/g, ' ').substring(0, 200)
         log.info(`[JavaCheck] java test: code=${code}, output=${clean}`)
         if (code === 0 || output.toLowerCase().includes('version')) {
-          resolve({ ok: true, output: clean })
+          const majorVersion = parseJavaMajorVersion(output)
+          resolve({ ok: true, output: clean, majorVersion })
         } else {
           resolve({ ok: false, output, error: `exit ${code}` })
         }
@@ -484,7 +532,6 @@ db.password.0=${mysqlConfig.password}
       // Windows：直接 spawn java.exe（参数逐个传递），完全绕过 cmd.exe 字符串解析问题
       const javaExe = join(javaHomeResolved, 'bin', 'java.exe')
       const nacosJar = join(nacosHome, 'target', 'nacos-server.jar')
-      const mode = instance.mode || 'standalone'
       const port = instance.port || '8848'
       // loader.path 和 nacos.home 必须用正斜杠，Java 在 Windows 上可正确处理
       const nacosHomeProp = nacosHome.replace(/\\/g, '/')
@@ -493,20 +540,37 @@ db.password.0=${mysqlConfig.password}
       const loaderPath = nacosHomeProp + '/bin,' + nacosHomeProp + '/plugins'
       // 直接 spawn java.exe，参数作为独立数组元素传递，Node.js 负责正确引用
       // 注意：-jar 之前是 JVM 参数，-jar 之后是程序参数
-      const args = [
+      const args: string[] = [
         `-Xms${jvmXms}`, `-Xmx${jvmXmx}`,
         `-Dnacos.standalone=true`,
         `-Dnacos.home=${nacosHomeProp}`,
         `-Dloader.path=${loaderPath}`,
-        // JDK 16+ 需要开放 java.base 模块，否则 sofa-jraft 初始化失败
-        // '--add-opens', 'java.base/java.util=ALL-UNNAMED',
-        // '--add-opens', 'java.base/java.lang=ALL-UNNAMED',
+      ]
+      // Nacos 3.x 架构变化：一个 JVM 内启动 Core / API / Console 三个 Spring Boot 上下文
+      // - server.port 会影响所有上下文，导致 Console 和 API 端口冲突
+      // - 需要用 nacos.server.main.port 设置 API 端口，Console 使用独立的 nacos.console.port
+      // - JRaft 通过反射访问 java.util.ArrayList.elementData，需 --add-opens 开放 JPMS 模块
+      const nacosMajor = parseInt(instance.version.replace(/^v/i, '').split('.')[0] || '2', 10)
+      if (nacosMajor >= 3) {
+        args.push(
+          `-Dnacos.server.main.port=${port}`,
+          '--add-opens', 'java.base/java.util=ALL-UNNAMED',
+          '--add-opens', 'java.base/java.lang=ALL-UNNAMED',
+          '--add-opens', 'java.base/java.lang.reflect=ALL-UNNAMED',
+          '--add-opens', 'java.base/java.text=ALL-UNNAMED',
+          '--add-opens', 'java.base/java.util.concurrent=ALL-UNNAMED',
+          '--add-opens', 'java.base/java.util.concurrent.atomic=ALL-UNNAMED',
+          '--add-opens', 'java.base/java.util.concurrent.locks=ALL-UNNAMED',
+        )
+      } else {
+        args.push(`-Dserver.port=${port}`)
+      }
+      args.push(
         '-jar', nacosJar,
         '--spring.config.additional-location=' + confPath,
         '--logging.config=' + nacosHomeProp + '/conf/nacos-logback.xml',
-        mode, port,
-      ]
-      return { cmd: javaExe, args, env: childEnv, cwd: nacosHome }
+      )
+      return { cmd: javaExe, args, env: childEnv }
     } else {
       const startupPath = join(nacosHome, 'bin', 'startup.sh')
       const cmdStr = `"${startupPath}" -m ${instance.mode} -p ${instance.port}`
@@ -564,6 +628,18 @@ db.password.0=${mysqlConfig.password}
       const javaCheck = await verifyJavaEnvironment()
       if (!javaCheck.ok) {
         throw new Error(`Java 环境检查失败：\n\n${javaCheck.error}\n\n提示：${javaCheck.hint}`)
+      }
+
+      // 校验 JDK 版本是否满足 Nacos 最低要求
+      const minJdk = getMinJdkForNacos(instance.version)
+      if (javaCheck.javaVersion && javaCheck.javaVersion < minJdk) {
+        throw new Error(
+          `JDK 版本不满足要求！\n\n` +
+          `  当前 JDK 版本：${javaCheck.javaVersion}\n` +
+          `  Nacos ${instance.version} 最低要求：JDK ${minJdk}\n\n` +
+          `请安装 JDK ${minJdk} 或更高版本，并更新 JAVA_HOME 环境变量。\n` +
+          `下载地址：https://adoptium.net/`
+        )
       }
 
       // 构建命令（通过 env 参数传递环境变量）
@@ -632,6 +708,12 @@ db.password.0=${mysqlConfig.password}
           log.info(`[Start] ${instance.name} is ready!`)
           event.sender.send('instance:status-changed', instanceId, 'running')
           db.updateInstance(instanceId, { status: 'running' })
+          // 自动为本地实例创建/更新连接配置
+          try {
+            db.upsertLocalConnection(instanceId)
+          } catch (e: any) {
+            log.warn('[Start] Failed to upsert local connection:', e.message)
+          }
           break
         }
       }
@@ -831,6 +913,46 @@ db.password.0=${mysqlConfig.password}
     } catch (error) {
       log.error('Failed to delete connection:', error)
       throw error
+    }
+  })
+
+  /**
+   * 为本地实例自动创建或更新对应的连接配置
+   */
+  ipcMain.handle('connection:upsert-local', (_, instanceId: number) => {
+    try {
+      const conn = db.upsertLocalConnection(instanceId)
+      if (conn) {
+        log.info(`[Connection] Upserted local connection for instance ${instanceId}: ${conn.name} -> ${conn.server_url}`)
+      }
+      return conn
+    } catch (error) {
+      log.error('Failed to upsert local connection:', error)
+      throw error
+    }
+  })
+
+  /**
+   * 检测指定 Nacos 连接地址是否可达
+   * Nacos 1.x/2.x/3.x 的 API 都在 /nacos context path 下
+   */
+  ipcMain.handle('connection:health-check', async (_, url: string, _version?: string) => {
+    try {
+      const baseUrl = url.replace(/\/$/, '')
+      const checkUrl = `${baseUrl}/nacos/`
+
+      return new Promise<{ reachable: boolean; error?: string }>((resolve) => {
+        const urlObj = new URL(checkUrl)
+        const lib = urlObj.protocol === 'https:' ? https : http
+        const req = lib.get(checkUrl, { timeout: 3000 }, (res) => {
+          resolve({ reachable: res.statusCode !== undefined && res.statusCode < 500 })
+          res.resume()
+        })
+        req.on('error', (err) => resolve({ reachable: false, error: err.message }))
+        req.on('timeout', () => { req.destroy(); resolve({ reachable: false, error: 'timeout' }) })
+      })
+    } catch (error: any) {
+      return { reachable: false, error: error.message }
     }
   })
 
@@ -1275,6 +1397,155 @@ db.password.0=${mysqlConfig.password}
         reject(new Error(`URL parse error: ${e.message}`))
       }
     })
+  })
+
+  // ==================== Nacos 本地配置文件管理 ====================
+
+  /**
+   * 获取指定实例的 conf/ 目录下所有可编辑配置文件列表
+   */
+  ipcMain.handle('instance:conf-files', async (_, instanceId: number) => {
+    try {
+      const instance = db.getInstanceById(instanceId)
+      if (!instance) throw new Error('实例不存在')
+
+      const versionInfo = db.getAllVersions().find(v => v.version === instance.version)
+      if (!versionInfo) throw new Error('版本信息不存在，请先在版本管理中安装该版本')
+
+      // 尝试查找 Nacos 的 conf 目录（支持直接在 install_path 下或在 install_path/nacos 子目录下）
+      let confDir = join(versionInfo.install_path, 'conf')
+      if (!existsSync(confDir)) {
+        confDir = join(versionInfo.install_path, 'nacos', 'conf')
+      }
+      if (!existsSync(confDir)) {
+        throw new Error(`找不到配置目录，请确认版本 ${instance.version} 已正确安装\n期望路径: ${join(versionInfo.install_path, 'conf')}`)
+      }
+
+      const allowedExts = ['properties', 'conf', 'xml', 'yaml', 'yml', 'json', 'cfg', 'ini', 'txt', 'sh', 'cmd']
+      const entries = readdirSync(confDir, { withFileTypes: true })
+      const files = entries
+        .filter(e => {
+          if (!e.isFile()) return false
+          const ext = e.name.split('.').pop()?.toLowerCase() || ''
+          return allowedExts.includes(ext)
+        })
+        .map(e => {
+          const filePath = join(confDir, e.name)
+          const stats = statSync(filePath)
+          return {
+            name: e.name,
+            path: filePath,
+            size: stats.size,
+            modified: stats.mtime.toISOString()
+          }
+        })
+        .sort((a, b) => a.name.localeCompare(b.name))
+
+      return { confDir, files }
+    } catch (error: any) {
+      log.error('conf-files error:', error)
+      throw error
+    }
+  })
+
+  /**
+   * 读取配置文件内容
+   */
+  ipcMain.handle('instance:read-conf', async (_, filePath: string) => {
+    try {
+      if (!existsSync(filePath)) {
+        throw new Error(`文件不存在: ${filePath}`)
+      }
+      // 安全检查：只允许读取 .properties、.conf、.xml、.yaml、.yml 和 .json 文件
+      const ext = filePath.split('.').pop()?.toLowerCase() || ''
+      const allowedExts = ['properties', 'conf', 'xml', 'yaml', 'yml', 'json', 'cfg', 'ini', 'txt', 'sh', 'cmd']
+      if (!allowedExts.includes(ext)) {
+        throw new Error(`不支持编辑该类型的文件 (.${ext})`)
+      }
+      const content = readFileSync(filePath, 'utf-8')
+      return { content, path: filePath }
+    } catch (error: any) {
+      log.error('read-conf error:', error)
+      throw error
+    }
+  })
+
+  /**
+   * 写入配置文件内容（自动备份原文件）
+   */
+  ipcMain.handle('instance:write-conf', async (_, filePath: string, content: string) => {
+    try {
+      if (!existsSync(filePath)) {
+        throw new Error(`文件不存在: ${filePath}`)
+      }
+      // 安全检查
+      const ext = filePath.split('.').pop()?.toLowerCase() || ''
+      const allowedExts = ['properties', 'conf', 'xml', 'yaml', 'yml', 'json', 'cfg', 'ini', 'txt', 'sh', 'cmd']
+      if (!allowedExts.includes(ext)) {
+        throw new Error(`不支持编辑该类型的文件 (.${ext})`)
+      }
+
+      // 写入前自动备份（备份文件名加时间戳后缀）
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+      const backupPath = `${filePath}.bak.${timestamp}`
+      const original = readFileSync(filePath, 'utf-8')
+      writeFileSync(backupPath, original, 'utf-8')
+      log.info(`[ConfEdit] Backup created: ${backupPath}`)
+
+      // 写入新内容
+      writeFileSync(filePath, content, 'utf-8')
+      log.info(`[ConfEdit] Written: ${filePath} (${content.length} chars)`)
+
+      return { success: true, backupPath }
+    } catch (error: any) {
+      log.error('write-conf error:', error)
+      throw error
+    }
+  })
+
+  /**
+   * 获取控制台访问 URL
+   * Nacos 3.x+ 控制台在独立端口（nacos.console.port，默认 8080），路径为 /
+   * Nacos 2.x- 控制台在 API 端口，路径为 /nacos
+   */
+  ipcMain.handle('instance:get-console-url', async (_, instanceId: number) => {
+    try {
+      const instance = db.getInstanceById(instanceId)
+      if (!instance) throw new Error('实例不存在')
+
+      const nacosMajor = parseInt(instance.version.replace(/^v/i, '').split('.')[0] || '2', 10)
+      if (nacosMajor < 3) {
+        // Nacos 1.x / 2.x：控制台在 API 端口，路径 /nacos
+        return { url: `http://127.0.0.1:${instance.port}/nacos` }
+      }
+
+      // Nacos 3.x+：从 application.properties 读取 nacos.console.port
+      const version = db.getAllVersions().find(v => v.version === instance.version)
+      if (!version) {
+        // 找不到版本信息，使用默认 8080
+        return { url: `http://127.0.0.1:8080/` }
+      }
+
+      let nacosHome = version.install_path
+      // 兼容路径：如果 install_path 下没有 bin/startup.cmd，尝试 install_path/nacos
+      const startupCmd = join(nacosHome, 'bin', 'startup.cmd')
+      if (!existsSync(startupCmd) && existsSync(join(nacosHome, 'nacos', 'bin', 'startup.cmd'))) {
+        nacosHome = join(nacosHome, 'nacos')
+      }
+
+      const appPropPath = join(nacosHome, 'conf', 'application.properties')
+      let consolePort = 8080
+      if (existsSync(appPropPath)) {
+        const content = readFileSync(appPropPath, 'utf-8')
+        const match = content.match(/^\s*nacos\.console\.port\s*=\s*(\d+)\s*$/m)
+        if (match) consolePort = parseInt(match[1], 10)
+      }
+
+      return { url: `http://127.0.0.1:${consolePort}/` }
+    } catch (error: any) {
+      log.error('get-console-url error:', error)
+      throw error
+    }
   })
 
   log.info('All IPC handlers registered')

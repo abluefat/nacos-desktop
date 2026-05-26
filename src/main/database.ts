@@ -155,9 +155,31 @@ function createTables(): void {
       namespace TEXT DEFAULT 'public',
       username TEXT,
       password TEXT,
+      version TEXT DEFAULT '2.x',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
   `)
+
+  // 迁移：为旧数据库添加 version 列
+  try {
+    db.run(`ALTER TABLE nacos_connections ADD COLUMN version TEXT DEFAULT '2.x'`)
+    log.info('[DB] Migrated: added version column to nacos_connections')
+  } catch (e: any) {
+    // 列已存在时会报错，忽略
+    if (!e.message?.includes('duplicate column')) {
+      log.warn('[DB] Migration check:', e.message)
+    }
+  }
+
+  // 迁移：为旧数据库添加 instance_id 列（关联本地启动的实例）
+  try {
+    db.run(`ALTER TABLE nacos_connections ADD COLUMN instance_id INTEGER`)
+    log.info('[DB] Migrated: added instance_id column to nacos_connections')
+  } catch (e: any) {
+    if (!e.message?.includes('duplicate column')) {
+      log.warn('[DB] Migration check:', e.message)
+    }
+  }
 
   saveDatabase()
   log.info('Database tables created successfully')
@@ -315,6 +337,8 @@ export interface NacosConnection {
   namespace?: string
   username?: string
   password?: string
+  version?: string
+  instance_id?: number
   created_at?: string
 }
 
@@ -326,13 +350,17 @@ function rowToConnection(row: any[]): NacosConnection {
     namespace: row[3] as string,
     username: row[4] as string,
     password: row[5] as string,
-    created_at: row[6] as string
+    version: row[6] as string,
+    instance_id: row[7] as number | undefined,
+    created_at: row[8] as string
   }
 }
 
 export function getAllConnections(): NacosConnection[] {
   if (!db) return []
-  const results = db.exec('SELECT * FROM nacos_connections ORDER BY created_at DESC')
+  const results = db.exec(
+    'SELECT id, name, server_url, namespace, username, password, version, instance_id, created_at FROM nacos_connections ORDER BY created_at DESC'
+  )
   if (results.length === 0) return []
   return results[0].values.map(row => JSON.parse(JSON.stringify(rowToConnection(row))))
 }
@@ -340,13 +368,15 @@ export function getAllConnections(): NacosConnection[] {
 export function addConnection(connection: NacosConnection): NacosConnection {
   if (!db) throw new Error('Database not initialized')
   db.run(
-    'INSERT INTO nacos_connections (name, server_url, namespace, username, password) VALUES (?, ?, ?, ?, ?)',
+    'INSERT INTO nacos_connections (name, server_url, namespace, username, password, version, instance_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
     [
       connection.name,
       connection.server_url,
       connection.namespace || 'public',
       connection.username || null,
-      connection.password || null
+      connection.password || null,
+      connection.version || '2.x',
+      connection.instance_id || null
     ]
   )
   const results = db.exec('SELECT last_insert_rowid()')
@@ -359,6 +389,57 @@ export function deleteConnection(id: number): void {
   if (!db) throw new Error('Database not initialized')
   db.run('DELETE FROM nacos_connections WHERE id = ?', [id])
   saveDatabase()
+}
+
+/**
+ * 根据 instance_id 删除关联的本地连接
+ */
+export function deleteConnectionsByInstanceId(instanceId: number): void {
+  if (!db) throw new Error('Database not initialized')
+  db.run('DELETE FROM nacos_connections WHERE instance_id = ?', [instanceId])
+  saveDatabase()
+}
+
+/**
+ * 为本地实例创建或更新对应的连接配置
+ */
+export function upsertLocalConnection(instanceId: number): NacosConnection | null {
+  if (!db) throw new Error('Database not initialized')
+
+  // 查询实例信息
+  const instResult = db.exec('SELECT name, version, port FROM nacos_instances WHERE id = ?', [instanceId])
+  if (instResult.length === 0 || instResult[0].values.length === 0) return null
+
+  const [name, version, port] = instResult[0].values[0]
+  const major = parseInt(String(version).replace(/^v/i, '').split('.')[0] || '2', 10)
+  const connVersion = major >= 3 ? '3.x' : '2.x'
+
+  // Nacos 1.x/2.x/3.x 的配置管理 Admin API 都走 API 端口（server.main.port）
+  const serverUrl = `http://127.0.0.1:${port}`
+
+  // 查询是否已有对应的本地连接
+  const existResult = db.exec('SELECT id FROM nacos_connections WHERE instance_id = ?', [instanceId])
+
+  if (existResult.length > 0 && existResult[0].values.length > 0) {
+    // 更新已有连接
+    const connId = existResult[0].values[0][0] as number
+    db.run(
+      'UPDATE nacos_connections SET name = ?, server_url = ?, version = ? WHERE id = ?',
+      [name, serverUrl, connVersion, connId]
+    )
+    saveDatabase()
+    return { id: connId, name: name as string, server_url: serverUrl, version: connVersion, instance_id: instanceId, namespace: 'public' }
+  } else {
+    // 创建新连接
+    db.run(
+      'INSERT INTO nacos_connections (name, server_url, namespace, version, instance_id) VALUES (?, ?, ?, ?, ?)',
+      [name, serverUrl, 'public', connVersion, instanceId]
+    )
+    const results = db.exec('SELECT last_insert_rowid()')
+    const connId = results[0].values[0][0] as number
+    saveDatabase()
+    return { id: connId, name: name as string, server_url: serverUrl, version: connVersion, instance_id: instanceId, namespace: 'public' }
+  }
 }
 
 // ==================== 启动清扫 ====================

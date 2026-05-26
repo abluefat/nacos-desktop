@@ -50,14 +50,22 @@ const api = {
     health: (id: number) => ipcRenderer.invoke('instance:health', id),
     logFiles: (id: number) => ipcRenderer.invoke('instance:log-files', id),
     logContent: (id: number, fileName: string, maxLines?: number) => ipcRenderer.invoke('instance:log-content', id, fileName, maxLines),
-    clusterStatus: (id: number) => ipcRenderer.invoke('instance:cluster-status', id)
+    clusterStatus: (id: number) => ipcRenderer.invoke('instance:cluster-status', id),
+    // 本地配置文件读写
+    confFiles: (id: number) => ipcRenderer.invoke('instance:conf-files', id),
+    readConf: (filePath: string) => ipcRenderer.invoke('instance:read-conf', filePath),
+    writeConf: (filePath: string, content: string) => ipcRenderer.invoke('instance:write-conf', filePath, content),
+    // Nacos 3.x+ 控制台 URL
+    getConsoleUrl: (id: number) => ipcRenderer.invoke('instance:get-console-url', id)
   },
 
   // 连接管理
   connection: {
     getAll: () => ipcRenderer.invoke('connection:get-all'),
     add: (connection: any) => ipcRenderer.invoke('connection:add', connection),
-    delete: (id: number) => ipcRenderer.invoke('connection:delete', id)
+    delete: (id: number) => ipcRenderer.invoke('connection:delete', id),
+    upsertLocal: (instanceId: number) => ipcRenderer.invoke('connection:upsert-local', instanceId),
+    healthCheck: (url: string, version?: string) => ipcRenderer.invoke('connection:health-check', url, version)
   },
 
   // 系统工具

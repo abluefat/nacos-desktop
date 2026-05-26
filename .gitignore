@@ -8,6 +8,7 @@ node_modules/
 # ===========================
 out/
 dist/
+dist-v2/
 
 # ===========================
 # 运行时 / 日志
@@ -42,6 +43,7 @@ dist/builder-debug.yml
 *.njsproj
 *.sln
 *.sw?
+.github
 
 # ===========================
 # OS
@@ -61,3 +63,6 @@ desktop.ini
 # TypeScript 增量编译缓存
 # ===========================
 *.tsbuildinfo
+
+CLAUDE.md
+

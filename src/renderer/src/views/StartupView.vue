@@ -119,6 +119,10 @@
               <el-icon><Document /></el-icon>
               日志
             </el-button>
+            <el-button size="small" type="info" plain @click="openConfEditor(inst)">
+              <el-icon><Setting /></el-icon>
+              配置文件
+            </el-button>
             <el-button size="small" type="warning" @click="handleEditInstance(inst)">
               <el-icon><Edit /></el-icon>
             </el-button>
@@ -242,13 +246,22 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 配置文件编辑器 -->
+    <ConfigFileEditor
+      v-if="confEditorInstance"
+      v-model="confEditorVisible"
+      :instance-id="confEditorInstance.id"
+      :instance-name="confEditorInstance.name"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Plus, Box, VideoPlay, VideoPause, Top, Edit, Delete, CircleCheck, CircleClose, Document, Bottom, Loading } from '@element-plus/icons-vue'
+import { Refresh, Plus, Box, VideoPlay, VideoPause, Top, Edit, Delete, CircleCheck, CircleClose, Document, Bottom, Loading, Setting } from '@element-plus/icons-vue'
+import ConfigFileEditor from '@/components/ConfigFileEditor.vue'
 
 interface LocalVersion { id: number; version: string; install_path: string }
 interface Instance { id: number; name: string; version: string; mode: string; port: number; pid: number | null; status: string; jvm_xms: string; jvm_xmx: string; cluster_nodes: string | null }
@@ -274,6 +287,10 @@ const clusterStatusMap = ref<Record<number, any>>({})
 const clusterLoading = ref<Record<number, boolean>>({})
 const startResultVisible = ref(false)
 const startResult = ref<{ success: boolean; message: string; pid?: number }>({})
+
+// 配置文件编辑器
+const confEditorVisible = ref(false)
+const confEditorInstance = ref<Instance | null>(null)
 
 const instanceForm = reactive({
   name: '',
@@ -411,9 +428,19 @@ async function handleDeleteInstance(inst: Instance) {
 }
 
 // 打开控制台
-function openConsole(inst: Instance) {
-  const url = `http://127.0.0.1:${inst.port}/nacos`
-  window.api.shell.openExternal(url)
+async function openConsole(inst: Instance) {
+  try {
+    const { url } = await window.api.instance.getConsoleUrl(inst.id)
+    window.api.shell.openExternal(url)
+  } catch (e: any) {
+    ElMessage.error(e.message || '获取控制台地址失败')
+  }
+}
+
+// 打开配置文件编辑器
+function openConfEditor(inst: Instance) {
+  confEditorInstance.value = inst
+  confEditorVisible.value = true
 }
 
 // 日志查看器
@@ -553,13 +580,16 @@ watch(logTab, (val) => {
 
 .instance-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fill, 360px);
   gap: 16px;
   flex: 1;
+  justify-content: start;
 }
 
 .instance-card {
   transition: box-shadow 0.2s;
+  width: 360px;
+  align-self: start;
 }
 
 .instance-card:hover {
