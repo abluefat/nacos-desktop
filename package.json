@@ -1,6 +1,6 @@
 {
   "name": "nacos-desktop",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Nacos Desktop Manager - 跨平台 Nacos 版本管理与启动工具",
   "main": "./out/main/index.js",
   "author": "",

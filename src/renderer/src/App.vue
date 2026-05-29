@@ -4,8 +4,7 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="logo">
-          <el-icon :size="28"><Box /></el-icon>
-          <span class="title">Nacos Desktop</span>
+          <img src="./assets/logo.png" class="logo-img" alt="Nacos Logo" />
         </div>
         <div class="version-tag">v{{ appVersion }}</div>
       </div>
@@ -171,13 +170,14 @@ onUnmounted(() => {
 .logo {
   display: flex;
   align-items: center;
-  gap: 10px;
-  color: var(--color-primary, #409eff);
+  justify-content: center;
 }
 
-.logo .title {
-  font-size: 16px;
-  font-weight: 600;
+.logo-img {
+  width: 140px;
+  height: auto;
+  object-fit: contain;
+  border-radius: 8px;
 }
 
 .version-tag {

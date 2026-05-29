@@ -332,8 +332,10 @@ db.password.0=${mysqlConfig.password}
   /**
    * 根据 Nacos 版本号获取最低 JDK 要求
    * - Nacos 1.x: JDK 8
-   * - Nacos 2.0.x ~ 2.3.x: JDK 8
-   * - Nacos 2.4.x+: JDK 11
+   * - Nacos 2.x（全系列 2.0 ~ 2.x）: JDK 8
+   * - Nacos 3.0+: JDK 17
+   * 参考：https://nacos.io/docs/v2.5/quickstart/quick-start/
+   *       https://nacos.io/docs/v3.0/quickstart/quick-start/
    */
   function getMinJdkForNacos(nacosVersion: string): number {
     const ver = nacosVersion.replace(/^v/i, '').trim()
@@ -342,13 +344,9 @@ db.password.0=${mysqlConfig.password}
     const major = parseInt(parts[0], 10)
     if (isNaN(major)) return 8
     if (major === 1) return 8
-    if (major === 2) {
-      const minor = parseInt(parts[1], 10)
-      if (isNaN(minor)) return 8
-      return minor >= 4 ? 11 : 8
-    }
-    // Nacos 3.x+ (未来版本，保守估计)
-    return 11
+    if (major === 2) return 8  // 2.x 全系列支持 JDK 8
+    // Nacos 3.x+: JDK 17
+    return 17
   }
 
   async function verifyJavaEnvironment(): Promise<{ ok: boolean; javaHome?: string; javaVersion?: number; error?: string; hint?: string }> {

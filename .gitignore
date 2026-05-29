@@ -9,6 +9,7 @@ node_modules/
 out/
 dist/
 dist-v2/
+dist-v201/
 
 # ===========================
 # 运行时 / 日志
