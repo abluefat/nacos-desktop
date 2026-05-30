@@ -27,6 +27,10 @@
           <el-icon><Setting /></el-icon>
           <span>配置管理</span>
         </el-menu-item>
+        <el-menu-item index="/service">
+          <el-icon><Grid /></el-icon>
+          <span>服务管理</span>
+        </el-menu-item>
       </el-menu>
 
       <div class="sidebar-footer">

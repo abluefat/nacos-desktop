@@ -60,6 +60,10 @@
             <span class="label">端口</span>
             <span class="value">{{ inst.port }}</span>
           </div>
+          <div v-if="inst.username" class="info-row">
+            <span class="label">用户</span>
+            <span class="value">{{ inst.username }}</span>
+          </div>
           <div class="info-row">
             <span class="label">JVM</span>
             <span class="value">{{ inst.jvm_xms || '512m' }} / {{ inst.jvm_xmx || '1024m' }}</span>
@@ -157,6 +161,12 @@
               <span style="color: #999">默认 8848</span>
             </template>
           </el-input-number>
+        </el-form-item>
+        <el-form-item label="用户名">
+          <el-input v-model="instanceForm.username" placeholder="nacos（留空跳过鉴权）" clearable />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="instanceForm.password" type="password" placeholder="nacos" show-password />
         </el-form-item>
         <el-form-item label="JVM 内存" prop="jvm_xms">
           <el-input v-model="instanceForm.jvm_xms" placeholder="最小堆内存，如 512m" style="width: 48%" />
@@ -264,7 +274,7 @@ import { Refresh, Plus, Box, VideoPlay, VideoPause, Top, Edit, Delete, CircleChe
 import ConfigFileEditor from '@/components/ConfigFileEditor.vue'
 
 interface LocalVersion { id: number; version: string; install_path: string }
-interface Instance { id: number; name: string; version: string; mode: string; port: number; pid: number | null; status: string; jvm_xms: string; jvm_xmx: string; cluster_nodes: string | null }
+interface Instance { id: number; name: string; version: string; mode: string; port: number; pid: number | null; status: string; jvm_xms: string; jvm_xmx: string; cluster_nodes: string | null; username?: string; password?: string }
 
 // 状态
 const instances = ref<Instance[]>([])
@@ -300,7 +310,9 @@ const instanceForm = reactive({
   jvm_xms: '512m',
   jvm_xmx: '1024m',
   work_dir: '',
-  cluster_nodes: ''
+  cluster_nodes: '',
+  username: 'nacos',
+  password: 'nacos'
 })
 const clusterNodesInput = ref('')
 
@@ -337,7 +349,7 @@ async function loadClusterStatus(inst: Instance) {
 function handleCreateInstance() {
   isEdit.value = false
   editingId.value = null
-  Object.assign(instanceForm, { name: '', version: '', mode: 'standalone', port: 8848, jvm_xms: '512m', jvm_xmx: '1024m', work_dir: '', cluster_nodes: '' })
+  Object.assign(instanceForm, { name: '', version: '', mode: 'standalone', port: 8848, jvm_xms: '512m', jvm_xmx: '1024m', work_dir: '', cluster_nodes: '', username: 'nacos', password: 'nacos' })
   clusterNodesInput.value = ''
   dialogVisible.value = true
 }
@@ -353,7 +365,9 @@ function handleEditInstance(inst: Instance) {
     port: inst.port,
     jvm_xms: inst.jvm_xms || '512m',
     jvm_xmx: inst.jvm_xmx || '1024m',
-    work_dir: inst.work_dir || ''
+    work_dir: inst.work_dir || '',
+    username: inst.username || 'nacos',
+    password: inst.password || 'nacos'
   })
   try {
     clusterNodesInput.value = inst.cluster_nodes ? JSON.parse(inst.cluster_nodes).join('\n') : ''
@@ -530,6 +544,12 @@ function onInstanceStatusChanged(instanceId: number, status: string) {
 onMounted(async () => {
   await loadInstances()
   await loadLocalVersions()
+
+  // 检测所有实例的实际运行状态（应用重启后恢复）
+  try {
+    await window.api.instance.detectAllStatus()
+    await loadInstances() // 重新加载以获取更新后的状态
+  } catch { /* 静默失败 */ }
 
   // 监听日志
   window.api.on('instance:log', onInstanceLog)

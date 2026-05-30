@@ -109,6 +109,26 @@ export async function initDatabase(): Promise<void> {
 
   // 创建表
   createTables()
+
+  // 兼容迁移：旧数据库可能缺少 username/password 列
+  migrateInstanceAuthColumns()
+}
+
+// 兼容迁移：给 nacos_instances 加 username/password 列
+function migrateInstanceAuthColumns(): void {
+  if (!db) return
+  const cols = db.exec("PRAGMA table_info(nacos_instances)")
+  if (cols.length > 0) {
+    const colNames = cols[0].values.map((r: any[]) => r[1] as string)
+    if (!colNames.includes('username')) {
+      db.run("ALTER TABLE nacos_instances ADD COLUMN username TEXT DEFAULT 'nacos'")
+      log.info('[DB] Migrated: added username column to nacos_instances')
+    }
+    if (!colNames.includes('password')) {
+      db.run("ALTER TABLE nacos_instances ADD COLUMN password TEXT DEFAULT 'nacos'")
+      log.info('[DB] Migrated: added password column to nacos_instances')
+    }
+  }
 }
 
 // 创建数据库表
@@ -139,6 +159,8 @@ function createTables(): void {
       jvm_xmx TEXT DEFAULT '512m',
       cluster_nodes TEXT,
       mysql_config TEXT,
+      username TEXT DEFAULT 'nacos',
+      password TEXT DEFAULT 'nacos',
       pid INTEGER,
       status TEXT DEFAULT 'stopped',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -248,6 +270,8 @@ export interface NacosInstance {
   jvm_xmx?: string
   cluster_nodes?: string
   mysql_config?: string
+  username?: string
+  password?: string
   pid?: number
   status?: string
   created_at?: string
@@ -266,23 +290,27 @@ function rowToInstance(row: any[]): NacosInstance {
     jvm_xmx: row[7] as string,
     cluster_nodes: row[8] as string,
     mysql_config: row[9] as string,
-    pid: row[10] as number,
-    status: row[11] as string,
-    created_at: row[12] as string,
-    updated_at: row[13] as string
+    username: row[10] as string,
+    password: row[11] as string,
+    pid: row[12] as number,
+    status: row[13] as string,
+    created_at: row[14] as string,
+    updated_at: row[15] as string
   }
 }
 
+const INSTANCE_COLUMNS = 'id, name, version, mode, port, work_dir, jvm_xms, jvm_xmx, cluster_nodes, mysql_config, username, password, pid, status, created_at, updated_at'
+
 export function getAllInstances(): NacosInstance[] {
   if (!db) return []
-  const results = db.exec('SELECT * FROM nacos_instances ORDER BY created_at DESC')
+  const results = db.exec(`SELECT ${INSTANCE_COLUMNS} FROM nacos_instances ORDER BY created_at DESC`)
   if (results.length === 0) return []
   return results[0].values.map(row => JSON.parse(JSON.stringify(rowToInstance(row))))
 }
 
 export function getInstanceById(id: number): NacosInstance | undefined {
   if (!db) return undefined
-  const results = db.exec('SELECT * FROM nacos_instances WHERE id = ?', [id])
+  const results = db.exec(`SELECT ${INSTANCE_COLUMNS} FROM nacos_instances WHERE id = ?`, [id])
   if (results.length === 0 || results[0].values.length === 0) return undefined
   return JSON.parse(JSON.stringify(rowToInstance(results[0].values[0])))
 }
@@ -290,8 +318,8 @@ export function getInstanceById(id: number): NacosInstance | undefined {
 export function addInstance(instance: NacosInstance): NacosInstance {
   if (!db) throw new Error('Database not initialized')
   db.run(
-    `INSERT INTO nacos_instances (name, version, mode, port, work_dir, jvm_xms, jvm_xmx, cluster_nodes, mysql_config)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO nacos_instances (name, version, mode, port, work_dir, jvm_xms, jvm_xmx, cluster_nodes, mysql_config, username, password)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       instance.name,
       instance.version,
@@ -301,7 +329,9 @@ export function addInstance(instance: NacosInstance): NacosInstance {
       instance.jvm_xms || '512m',
       instance.jvm_xmx || '512m',
       instance.cluster_nodes || null,
-      instance.mysql_config || null
+      instance.mysql_config || null,
+      instance.username || 'nacos',
+      instance.password || 'nacos'
     ]
   )
   const results = db.exec('SELECT last_insert_rowid()')
@@ -407,10 +437,10 @@ export function upsertLocalConnection(instanceId: number): NacosConnection | nul
   if (!db) throw new Error('Database not initialized')
 
   // 查询实例信息
-  const instResult = db.exec('SELECT name, version, port FROM nacos_instances WHERE id = ?', [instanceId])
+  const instResult = db.exec('SELECT name, version, port, username, password FROM nacos_instances WHERE id = ?', [instanceId])
   if (instResult.length === 0 || instResult[0].values.length === 0) return null
 
-  const [name, version, port] = instResult[0].values[0]
+  const [name, version, port, username, password] = instResult[0].values[0]
   const major = parseInt(String(version).replace(/^v/i, '').split('.')[0] || '2', 10)
   const connVersion = major >= 3 ? '3.x' : '2.x'
 
@@ -424,21 +454,21 @@ export function upsertLocalConnection(instanceId: number): NacosConnection | nul
     // 更新已有连接
     const connId = existResult[0].values[0][0] as number
     db.run(
-      'UPDATE nacos_connections SET name = ?, server_url = ?, version = ? WHERE id = ?',
-      [name, serverUrl, connVersion, connId]
+      'UPDATE nacos_connections SET name = ?, server_url = ?, version = ?, username = ?, password = ? WHERE id = ?',
+      [name, serverUrl, connVersion, username || 'nacos', password || 'nacos', connId]
     )
     saveDatabase()
-    return { id: connId, name: name as string, server_url: serverUrl, version: connVersion, instance_id: instanceId, namespace: 'public' }
+    return { id: connId, name: name as string, server_url: serverUrl, version: connVersion, instance_id: instanceId, namespace: 'public', username: username || 'nacos', password: password || 'nacos' }
   } else {
     // 创建新连接
     db.run(
-      'INSERT INTO nacos_connections (name, server_url, namespace, version, instance_id) VALUES (?, ?, ?, ?, ?)',
-      [name, serverUrl, 'public', connVersion, instanceId]
+      'INSERT INTO nacos_connections (name, server_url, namespace, version, instance_id, username, password) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [name, serverUrl, 'public', connVersion, instanceId, username || 'nacos', password || 'nacos']
     )
     const results = db.exec('SELECT last_insert_rowid()')
     const connId = results[0].values[0][0] as number
     saveDatabase()
-    return { id: connId, name: name as string, server_url: serverUrl, version: connVersion, instance_id: instanceId, namespace: 'public' }
+    return { id: connId, name: name as string, server_url: serverUrl, version: connVersion, instance_id: instanceId, namespace: 'public', username: username || 'nacos', password: password || 'nacos' }
   }
 }
 

@@ -767,12 +767,33 @@ db.password.0=${mysqlConfig.password}
       const instance = db.getInstanceById(instanceId)
       if (!instance) throw new Error('Instance not found')
 
-      const isRunning = runningProcesses.has(instanceId)
-      const healthy = isRunning ? await checkNacosHealth(instance.port) : false
-
-      return { running: isRunning, healthy }
+      // 不管 runningProcesses 是否有记录，都做实际端口检测
+      // 应用重启后 runningProcesses 为空，但 Nacos 可能仍在运行
+      const healthy = await checkNacosHealth(instance.port)
+      return { running: healthy, healthy }
     } catch (error: any) {
       throw error
+    }
+  })
+
+  // 检测所有实例的实际运行状态并同步数据库
+  ipcMain.handle('instance:detect-all-status', async () => {
+    try {
+      const instances = db.getAllInstances()
+      for (const inst of instances) {
+        const healthy = await checkNacosHealth(inst.port)
+        const actualStatus = healthy ? 'running' : 'stopped'
+        if (inst.status !== actualStatus) {
+          db.updateInstance(inst.id, {
+            status: actualStatus,
+            pid: healthy ? (inst.pid || 0) : null
+          })
+        }
+      }
+      return { success: true }
+    } catch (error: any) {
+      log.warn('[Detect] Failed to detect all instance status:', error.message)
+      return { success: false }
     }
   })
 
@@ -1358,6 +1379,8 @@ db.password.0=${mysqlConfig.password}
         }
         if (bodyStr) {
           reqHeaders['Content-Length'] = Buffer.byteLength(bodyStr).toString()
+        } else if (method.toUpperCase() === 'PUT' || method.toUpperCase() === 'POST') {
+          reqHeaders['Content-Length'] = '0'
         }
 
         const reqOptions = {

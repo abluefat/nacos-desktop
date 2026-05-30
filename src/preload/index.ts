@@ -56,7 +56,8 @@ const api = {
     readConf: (filePath: string) => ipcRenderer.invoke('instance:read-conf', filePath),
     writeConf: (filePath: string, content: string) => ipcRenderer.invoke('instance:write-conf', filePath, content),
     // Nacos 3.x+ 控制台 URL
-    getConsoleUrl: (id: number) => ipcRenderer.invoke('instance:get-console-url', id)
+    getConsoleUrl: (id: number) => ipcRenderer.invoke('instance:get-console-url', id),
+    detectAllStatus: () => ipcRenderer.invoke('instance:detect-all-status')
   },
 
   // 连接管理
